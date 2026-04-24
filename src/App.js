@@ -1,40 +1,156 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect,useCallback } from 'react';
 import './index.css';
 import {
-  Plus, ChatCircleDots,
-  GitBranch, ChatText, Gear, CaretDown,
-  Paperclip, PaperPlaneRight,
+  Plus, ChatText, Gear, CaretDown,
+  PaperPlaneRight,
   Database,
   SpinnerGap,
   UserCircle, Key, CreditCard, SlidersHorizontal, SignOut,
   MagnifyingGlass, ArrowSquareOut, Warning,
-  List, X
+  List, X,
+  Image, Video, Briefcase, Newspaper, Globe, MagicWand
 } from '@phosphor-icons/react';
-import logo from './assests/kinswords.png'
+import logo from './assests/kins-bgr.png'
 
 function App() {
+  // Theme State
+  const [theme, setTheme] = useState(() => localStorage.getItem('kinsword-theme') || 'light');
+  
+  // View States
   const [activeView, setActiveView] = useState('chat'); // 'chat' or 'settings'
   const [activeSettingsTab, setActiveSettingsTab] = useState('account');
   const [inputMode, setInputMode] = useState('chat'); // 'chat' | 'search'
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [messages, setMessages] = useState([]);
+  // const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 768);
+
+useEffect(() => {
+  const handleResize = () => {
+    if (window.innerWidth < 768) {
+      setSidebarOpen(false);
+    } else {
+      setSidebarOpen(true);
+    }
+  };
+
+  window.addEventListener('resize', handleResize);
+  return () => window.removeEventListener('resize', handleResize);
+}, []);
+  
+  // Chat History Management
+  const [conversations, setConversations] = useState(() => {
+    const saved = localStorage.getItem('kinsword-chats');
+    return saved ? JSON.parse(saved) : [{
+      id: 'default',
+      title: 'New Conversation',
+      messages: [],
+      timestamp: Date.now()
+    }];
+  });
+  
+  const [activeId, setActiveId] = useState(() => localStorage.getItem('kinsword-active-id') || 'default');
+  const activeChat = conversations.find(c => c.id === activeId) || conversations[0];
+  
   const [inputVal, setInputVal] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-
-  const [searchResults, setSearchResults] = useState(null);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchError, setSearchError] = useState(null);
+  const [searchCategory, setSearchCategory] = useState('all');
   const [lastQuery, setLastQuery] = useState('');
+  const [searchError, setSearchError] = useState(null);
+  const [resultsCache, setResultsCache] = useState({});
+  const [metaCache, setMetaCache] = useState({});
+  const [loadingStates, setLoadingStates] = useState({});
+  
+  // Language Optimization States
+  const [primaryLang, setPrimaryLang] = useState('English');
+  const [secondaryLang, setSecondaryLang] = useState('Tamil');
+  const [isLangDialogOpen, setIsLangDialogOpen] = useState(false);
+  const [geminiApiKey, setGeminiApiKey] = useState(process.env.REACT_APP_GEMINI_API_KEY);
 
   const textareaRef = useRef(null);
   const chatBottomRef = useRef(null);
 
+  const handleWebSearch = useCallback(async (query) => {
+    console.log('Web Search initiated for:', query);
+    setLoadingStates(prev => ({ ...prev, all: true }));
+    try {
+      const res = await fetch(`http://localhost:8000/api/search/?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      console.log('Web Search Response:', data);
+      if (!res.ok) {
+        setSearchError(data.error || 'An error occurred during web search.');
+      } else {
+        setResultsCache(prev => ({ ...prev, all: data.results || [] }));
+        setMetaCache(prev => ({ ...prev, all: { total: data.total, page: data.page, pageSize: data.page_size } }));
+      }
+    } catch (err) {
+      console.error('Web Search Fetch Error:', err);
+      setSearchError(`Web Search Error: ${err.message}. Check CORS or server status.`);
+    } finally {
+      setLoadingStates(prev => ({ ...prev, all: false }));
+    }
+  }, []);
+
+  const handleImageSearch = useCallback(async (query) => {
+    console.log('Image Search initiated for:', query);
+    setLoadingStates(prev => ({ ...prev, images: true }));
+    try {
+      const res = await fetch(`http://localhost:8000/api/search/images/?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      console.log('Image Search Response:', data);
+      if (!res.ok) {
+        setSearchError(data.error || 'An error occurred during image search.');
+      } else {
+        setResultsCache(prev => ({ ...prev, images: data.results || [] }));
+        setMetaCache(prev => ({ ...prev, images: { total: data.total, page: data.page, pageSize: data.page_size } }));
+      }
+    } catch (err) {
+      console.error('Image Search Fetch Error:', err);
+      setSearchError(`Image Search Error: ${err.message}. Check CORS or server status.`);
+    } finally {
+      setLoadingStates(prev => ({ ...prev, images: false }));
+    }
+  }, []);
+
+  const handleSearch = useCallback(async (query) => {
+    setLastQuery(query);
+    setInputVal('');
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    setSearchError(null);
+    
+    // Trigger web search
+    handleWebSearch(query);
+    
+    // Always trigger image search in background to be ready
+    handleImageSearch(query);
+    
+    // If we are in another mode (videos, etc), you could add more here
+  }, [searchCategory, handleImageSearch, handleWebSearch]);
+
+  // Sync Theme to DOM
+  useEffect(() => {
+    document.body.setAttribute('data-theme', theme);
+    localStorage.setItem('kinsword-theme', theme);
+  }, [theme]);
+
+  // Sync Conversations to LocalStorage
+  useEffect(() => {
+    localStorage.setItem('kinsword-chats', JSON.stringify(conversations));
+    localStorage.setItem('kinsword-active-id', activeId);
+  }, [conversations, activeId]);
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isTyping]);
+  }, [activeChat.messages, isTyping, inputMode, activeView]);
 
-
+  // Sync Chat Prompt to Search
+  useEffect(() => {
+    if (inputMode === 'search' && activeChat.messages.length > 0) {
+      const lastUserMsg = [...activeChat.messages].reverse().find(m => m.role === 'user')?.content;
+      if (lastUserMsg && lastUserMsg !== lastQuery) {
+        handleSearch(lastUserMsg);
+        setInputVal(lastUserMsg);
+      }
+    }
+  }, [inputMode, activeChat.messages, lastQuery, handleSearch]);
 
   const handleInput = (e) => {
     setInputVal(e.target.value);
@@ -44,7 +160,31 @@ function App() {
     }
   };
 
-  const handleSend = () => {
+  const createNewChat = () => {
+    const newId = Date.now().toString();
+    const newChat = {
+      id: newId,
+      title: 'New Conversation',
+      messages: [],
+      timestamp: Date.now()
+    };
+    setConversations(prev => [newChat, ...prev]);
+    setActiveId(newId);
+    setActiveView('chat');
+    if (window.innerWidth < 768) setSidebarOpen(false);
+  };
+
+  const deleteChat = (e, id) => {
+    e.stopPropagation();
+    if (conversations.length === 1) return;
+    const newConversations = conversations.filter(c => c.id !== id);
+    setConversations(newConversations);
+    if (activeId === id) {
+      setActiveId(newConversations[0].id);
+    }
+  };
+
+  const handleSend = async () => {
     if (!inputVal.trim()) return;
 
     if (inputMode === 'search') {
@@ -53,41 +193,72 @@ function App() {
     }
 
     const userMsg = inputVal.trim();
-    setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    const updatedMessages = [...activeChat.messages, { role: 'user', content: userMsg }];
+    
+    setConversations(prev => prev.map(c => 
+      c.id === activeId 
+        ? { ...c, messages: updatedMessages, title: c.title === 'New Conversation' ? userMsg.substring(0, 30) : c.title } 
+        : c
+    ));
+    
     setInputVal('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-
     setIsTyping(true);
 
-    setTimeout(() => {
+    try {
+      // Build Optimization Prompt
+      let optimizationInstruction = `Respond in ${primaryLang}.`;
+      if (secondaryLang !== 'None' && secondaryLang !== primaryLang) {
+        optimizationInstruction = `Respond primarily in ${primaryLang}, but naturally blend in the speaking tone, cultural nuances, and idioms of ${secondaryLang}. Use a stylistic hybrid approach (like 'Tanglish' for Tamil/English) where appropriate, ensuring the core content remains in ${primaryLang} while the tone and some expressions reflect ${secondaryLang}.`;
+      }
+
+      const history = activeChat.messages.map(m => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text: m.content }]
+      }));
+
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            ...history,
+            { role: 'user', parts: [{ text: `${optimizationInstruction} User prompt: ${userMsg}` }] }
+          ]
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error?.message || 'Gemini API Error');
+
+      const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || "I'm sorry, I couldn't generate a response.";
+
+      setConversations(prev => prev.map(c => 
+        c.id === activeId 
+          ? { ...c, messages: [...updatedMessages, { role: 'ai', content: aiText }] } 
+          : c
+      ));
+    } catch (err) {
+      setConversations(prev => prev.map(c => 
+        c.id === activeId 
+          ? { ...c, messages: [...updatedMessages, { role: 'ai', content: `Error: ${err.message}` }] } 
+          : c
+      ));
+    } finally {
       setIsTyping(false);
-      setMessages(prev => [...prev, {
-        role: 'ai',
-        content: 'This is a standard chat response from the AI.'
-      }]);
-    }, 1500);
+    }
   };
 
-  const handleSearch = async (query) => {
-    setLastQuery(query);
-    setInputVal('');
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    setSearchLoading(true);
-    setSearchError(null);
-    setSearchResults(null);
-    try {
-      const res = await fetch(`http://localhost:8000/api/search/?q=${encodeURIComponent(query)}`);
-      const data = await res.json();
-      if (!res.ok) {
-        setSearchError(data.error || 'An error occurred.');
-      } else {
-        setSearchResults(data.results || []);
-      }
-    } catch (err) {
-      setSearchError('Could not connect to the search server. Make sure it is running on port 8000.');
-    } finally {
-      setSearchLoading(false);
-    }
+
+  const exportChat = () => {
+    const content = activeChat.messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `kinsword-chat-${activeId}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleKeyDown = (e) => {
@@ -97,11 +268,9 @@ function App() {
     }
   };
 
-
-
   const switchView = (view) => {
     setActiveView(view);
-    setSidebarOpen(false);
+    if (window.innerWidth < 1024) setSidebarOpen(false);
   };
 
   return (
@@ -117,33 +286,35 @@ function App() {
             <span>KINSWORD</span>
           </div>
           <div className="sidebar-header-actions">
-            <button className="new-chat-btn"><Plus size={20} /></button>
+            <button className="new-chat-btn" onClick={createNewChat} title="New Chat"><Plus size={20} /></button>
             <button className="new-chat-btn hamburger-close" onClick={() => setSidebarOpen(false)}><X size={20} /></button>
           </div>
         </div>
 
-
         <div className="sidebar-history-container">
           <div className="sidebar-section-title">Recent Chats</div>
           <div className="sidebar-history">
-            <button className="history-item">
-              <GitBranch size={18} />
-              <span>Customer Support Bot Execution</span>
-            </button>
-            <button className="history-item">
-              <ChatText size={18} />
-              <span>How to center a div</span>
-            </button>
-            <button className="history-item">
-              <GitBranch size={18} />
-              <span>Daily Lead Generation</span>
-            </button>
+            {conversations.map(chat => (
+              <div 
+                key={chat.id} 
+                className={`history-item-wrapper ${activeId === chat.id ? 'active' : ''}`}
+                onClick={() => { setActiveId(chat.id); setActiveView('chat'); }}
+              >
+                <button className="history-item">
+                  <ChatText size={18} />
+                  <span>{chat.title}</span>
+                </button>
+                <button className="delete-chat-btn" onClick={(e) => deleteChat(e, chat.id)}>
+                   <X size={14} />
+                </button>
+              </div>
+            ))}
           </div>
         </div>
 
         <div className="sidebar-footer">
           <button className="user-profile" onClick={() => switchView('settings')}>
-            <img src="https://i.pravatar.cc/100?img=33" alt="Admin" />
+            <img src="https://tse2.mm.bing.net/th/id/OIP.0w-434RsnyuFSVDME6vx1gHaHa?w=512&h=512&rs=1&pid=ImgDetMain&o=7&rm=3" alt="Admin" />
             <div className="user-info">
               <span className="user-name">Admin User</span>
               <span className="user-role">Pro Plan</span>
@@ -167,7 +338,7 @@ function App() {
           <div style={{ width: 36 }} />
         </div>
 
-        {/* Abstracted chat overlay for both views */}
+        {/* Chat UI */}
         <div className={`view-container ${activeView !== 'chat' ? 'hidden' : ''}`}>
           <div className="top-nav">
             <div className="top-nav-left">
@@ -178,32 +349,58 @@ function App() {
               )}
             </div>
             <div className="nav-model-selector">
-              <span>KINSWORD Multi-Modal</span>
+              <span>KINSWORD Multi-Model</span>
               <CaretDown size={16} />
             </div>
-            <div className="top-nav-right" />
+            <div className="top-nav-right">
+              <div className="lang-selector-wrapper">
+                <button className="icon-btn" onClick={() => setIsLangDialogOpen(!isLangDialogOpen)} title="Language Optimization">
+                  <MagicWand size={20} />
+                </button>
+                {isLangDialogOpen && (
+                  <div className="lang-dialog">
+                    <div className="lang-dialog-header">
+                      <h4>Language Optimization</h4>
+                      <button className="dialog-close" onClick={() => setIsLangDialogOpen(false)}><X size={14} /></button>
+                    </div>
+                    <div className="lang-dialog-content">
+                      <div className="lang-input-group">
+                        <label>Main Language</label>
+                        <select value={primaryLang} onChange={(e) => setPrimaryLang(e.target.value)}>
+                          {['English', 'Hindi', 'Tamil', 'Bengali', 'Spanish', 'French', 'German', 'Japanese'].map(l => <option key={l} value={l}>{l}</option>)}
+                        </select>
+                      </div>
+                      <div className="lang-input-group">
+                        <label>Secondary Language</label>
+                        <select value={secondaryLang} onChange={(e) => setSecondaryLang(e.target.value)}>
+                          {['None', 'English', 'Hindi', 'Tamil', 'Bengali', 'Spanish', 'French', 'German', 'Japanese'].map(l => <option key={l} value={l}>{l}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <p className="lang-dialog-footer">AI will blend these languages in its response.</p>
+                  </div>
+                )}
+              </div>
+              <button className="icon-btn" onClick={exportChat} title="Export Chat">
+                <ArrowSquareOut size={20} />
+              </button>
+            </div>
           </div>
 
           <div className="chat-messages">
-            {/* Search Engine Panel */}
             {inputMode === 'search' ? (
               <div className="search-engine-panel">
-                {!searchLoading && !searchResults && !searchError && (
+                 {!loadingStates[searchCategory] && !resultsCache[searchCategory] && !searchError && (
                   <div className="search-welcome">
                     <div className="search-welcome-icon">
                       <img src={logo} alt="KinsWord Logo" width={50} height={50} style={{ objectFit: 'contain' }} />
                     </div>
                     <h2>Search the Web</h2>
                     <p>Type a query below and hit Enter to search via the KINSWORD AI Search Engine.</p>
-                    <div className="suggestion-chips" style={{ marginTop: '1.5rem' }}>
-                      <button className="chip" onClick={() => handleSearch('Wikipedia')}>Wikipedia</button>
-                      <button className="chip" onClick={() => handleSearch('OpenAI')}>OpenAI</button>
-                      <button className="chip" onClick={() => handleSearch('React.js')}>React.js</button>
-                    </div>
                   </div>
                 )}
 
-                {searchLoading && (
+                 {loadingStates[searchCategory] && (
                   <div className="search-loading">
                     <SpinnerGap size={32} className="spin-icon" />
                     <p>Searching for <strong>"{lastQuery}"</strong>...</p>
@@ -217,60 +414,62 @@ function App() {
                   </div>
                 )}
 
-                {searchResults && !searchLoading && (
+                {resultsCache[searchCategory] && !loadingStates[searchCategory] && (
                   <div className="search-results-container">
                     <p className="search-results-meta">
-                      Showing results for <strong>"{lastQuery}"</strong>
+                      Showing {metaCache[searchCategory]?.total || resultsCache[searchCategory].length} {searchCategory} results for <strong>"{lastQuery}"</strong>
                     </p>
-                    {searchResults.length === 0 && (
-                      <p className="search-no-results">No results found. Try a different query.</p>
+                    {searchCategory === 'images' ? (
+                      <div className="image-search-gallery">
+                        {resultsCache[searchCategory].map((img, i) => (
+                          <div key={i} className="image-result-card">
+                            <div className="image-wrapper">
+                              <img src={img.local_url ? `http://localhost:8000${img.local_url}` : img.url} alt={img.alt} />
+                              <div className="image-overlay">
+                                <a href={img.page_url} target="_blank" rel="noreferrer" className="image-source-link">
+                                  <img src={img.favicon || logo} alt="site" />
+                                  <span>{img.page_title}</span>
+                                </a>
+                              </div>
+                            </div>
+                            <p className="image-alt-text">{img.alt || 'No description available'}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      resultsCache[searchCategory].map((result, i) => (
+                        <a key={i} className="search-result-card" href={result.url} target="_blank" rel="noopener noreferrer">
+                          <div className="result-header">
+                            <img src={result.favicon || logo} alt="favicon" className="result-favicon" />
+                            <span className="result-domain">{result.domain}</span>
+                          </div>
+                          <h3 className="search-result-title">{result.title}</h3>
+                          <p className="search-result-snippet">{result.snippet}</p>
+                        </a>
+                      ))
                     )}
-                    {searchResults.map((result, i) => (
-                      <a
-                        key={i}
-                        className="search-result-card"
-                        href={result.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        <div className="search-result-header">
-                          <div className="search-result-favicon-wrap">
-                            {result.favicon
-                              ? <img src={result.favicon} alt="" className="search-result-favicon" onError={e => { e.target.style.display = 'none'; }} />
-                              : <MagnifyingGlass size={14} />
-                            }
-                          </div>
-                          <div className="search-result-meta">
-                            <span className="search-result-domain">{new URL(result.url).hostname}</span>
-                          </div>
-                          <ArrowSquareOut size={16} className="search-result-link-icon" />
-                        </div>
-                        <h3 className="search-result-title">{result.title}</h3>
-                        <p className="search-result-snippet">{result.snippet}</p>
-                      </a>
-                    ))}
                   </div>
                 )}
               </div>
             ) : (
               <>
-                {messages.length === 0 && (
+                {activeChat.messages.length === 0 && (
                   <div className="welcome-screen">
                     <div className="logo-large-wrap" style={{ background: 'transparent', boxShadow: 'none' }}>
                       <img src={logo} alt="KinsWord Logo" width={64} height={64} style={{ objectFit: 'contain' }} />
                     </div>
                     <h1>What can I help you build today?</h1>
                     <div className="suggestion-chips">
-                      <button className="chip" onClick={() => setInputVal('Write a Python script')}>Write a Python script</button>
-                      <button className="chip" onClick={() => setInputVal('Explain quantum computing')}>Explain quantum computing</button>
-                      <button className="chip" onClick={() => setInputVal('Draft an email')}>Draft an email</button>
+                      <button className="chip" onClick={() => setInputVal('Write a Python script')}>Write a script</button>
+                      <button className="chip" onClick={() => setInputVal('Explain quantum computing')}>Explain concept</button>
+                      <button className="chip" onClick={() => setInputVal('Draft an email')}>Draft email</button>
                     </div>
                   </div>
                 )}
 
-                {messages.map((msg, i) => (
+                {activeChat.messages.map((msg, i) => (
                   <div key={i} className={`message ${msg.role === 'user' ? 'user-message' : 'ai-message'}`}>
-                    <div className="message-avatar" style={msg.role === 'user' ? { backgroundImage: 'url("https://i.pravatar.cc/100?img=33")' } : {}}>
+                    <div className="message-avatar" style={msg.role === 'user' ? { backgroundImage: 'url("https://tse2.mm.bing.net/th/id/OIP.0w-434RsnyuFSVDME6vx1gHaHa?w=512&h=512&rs=1&pid=ImgDetMain&o=7&rm=3")' } : {}}>
                       {msg.role === 'ai' && <img src={logo} alt="AI" width={20} height={20} style={{ objectFit: 'contain' }} />}
                     </div>
                     <div className="message-content">
@@ -295,88 +494,82 @@ function App() {
           </div>
 
           <div className="chat-input-area">
-            {/* Mode Switcher */}
             <div className="input-mode-switcher">
-              <button
-                className={`mode-tab ${inputMode === 'chat' ? 'active' : ''}`}
-                onClick={() => setInputMode('chat')}
-              >
+              <button className={`mode-tab ${inputMode === 'chat' ? 'active' : ''}`} onClick={() => setInputMode('chat')}>
                 <img src={logo} alt="Chat" width={15} height={15} style={{ verticalAlign: 'middle', marginRight: '4px' }} />
                 AI Chat
               </button>
-              <button
-                className={`mode-tab ${inputMode === 'search' ? 'active' : ''}`}
-                onClick={() => setInputMode('search')}
-              >
-                <MagnifyingGlass size={15} />
-                Search Engine
-              </button>
+              
+              <div className={`search-mode-wrapper ${inputMode === 'search' ? 'active' : ''}`}>
+                <button className={`mode-tab ${inputMode === 'search' ? 'active' : ''}`} onClick={() => { setInputMode('search'); setSearchCategory('all'); }}>
+                  <MagnifyingGlass size={15} />
+                  <span>Search</span>
+                </button>
+                <div className="search-dropdown">
+                  <button className={`search-dropdown-item ${searchCategory === 'all' ? 'active' : ''}`} onClick={() => { setSearchCategory('all'); setInputMode('search'); if(inputVal.trim() && inputVal.trim() !== lastQuery) handleSearch(inputVal.trim()); }}>
+                    <Globe size={16} /> All
+                  </button>
+                  <button className={`search-dropdown-item ${searchCategory === 'images' ? 'active' : ''}`} onClick={() => { setSearchCategory('images'); setInputMode('search'); if(inputVal.trim() && inputVal.trim() !== lastQuery) handleSearch(inputVal.trim()); }}>
+                    <Image size={16} /> Images
+                  </button>
+                  <button className={`search-dropdown-item ${searchCategory === 'videos' ? 'active' : ''}`} onClick={() => { setSearchCategory('videos'); setInputMode('search'); if(inputVal.trim() && inputVal.trim() !== lastQuery) handleSearch(inputVal.trim()); }}>
+                    <Video size={16} /> Videos
+                  </button>
+                  <button className={`search-dropdown-item ${searchCategory === 'business' ? 'active' : ''}`} onClick={() => { setSearchCategory('business'); setInputMode('search'); if(inputVal.trim() && inputVal.trim() !== lastQuery) handleSearch(inputVal.trim()); }}>
+                    <Briefcase size={16} /> Business
+                  </button>
+                  <button className={`search-dropdown-item ${searchCategory === 'news' ? 'active' : ''}`} onClick={() => { setSearchCategory('news'); setInputMode('search'); if(inputVal.trim() && inputVal.trim() !== lastQuery) handleSearch(inputVal.trim()); }}>
+                    <Newspaper size={16} /> News
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="input-wrapper">
-              {inputMode === 'chat' && <button className="icon-btn"><Paperclip size={20} /></button>}
               <textarea
                 ref={textareaRef}
-                placeholder={inputMode === 'search' ? 'Search the web...' : 'Message Beta AI...'}
+                placeholder={inputMode === 'search' ? 'Search the web...' : 'Message KINSWORD...'}
                 rows="1"
                 value={inputVal}
                 onChange={handleInput}
                 onKeyDown={handleKeyDown}
               ></textarea>
               <button className={`icon-btn ${inputVal.trim() ? 'active-send' : ''}`} onClick={handleSend}>
-                {inputMode === 'search'
-                  ? <MagnifyingGlass weight={inputVal.trim() ? 'fill' : 'regular'} size={20} />
-                  : <PaperPlaneRight weight={inputVal.trim() ? 'fill' : 'regular'} size={20} />
-                }
+                <PaperPlaneRight weight={inputVal.trim() ? 'fill' : 'regular'} size={20} />
               </button>
             </div>
-            <p className="disclaimer">
-              {inputMode === 'search'
-                ? 'Results are powered by the Beta AI Search Engine API.'
-                : 'Beta AI can make mistakes. Consider verifying important information.'
-              }
-            </p>
+            <p className="disclaimer">Powered by KINSWORD AI. Accuracy may vary.</p>
           </div>
         </div>
 
         {/* Settings View */}
         <div className={`view-container settings-container ${activeView !== 'settings' ? 'hidden' : ''}`}>
+          <div className="settings-top-nav">
+             <div className="settings-nav-label">Settings</div>
+             <button className="icon-btn" onClick={() => switchView('chat')} title="Close Settings">
+               <X size={20} />
+             </button>
+          </div>
           <div className="settings-layout">
             <div className="settings-sidebar">
               <h2 className="settings-title">User Settings</h2>
               <div className="settings-nav">
-                <button
-                  className={`settings-nav-item ${activeSettingsTab === 'account' ? 'active' : ''}`}
-                  onClick={() => setActiveSettingsTab('account')}
-                >
-                  <UserCircle size={20} />
-                  <span>Account</span>
-                </button>
-                <button
-                  className={`settings-nav-item ${activeSettingsTab === 'preferences' ? 'active' : ''}`}
-                  onClick={() => setActiveSettingsTab('preferences')}
-                >
-                  <SlidersHorizontal size={20} />
-                  <span>Preferences</span>
-                </button>
-                <button
-                  className={`settings-nav-item ${activeSettingsTab === 'keys' ? 'active' : ''}`}
-                  onClick={() => setActiveSettingsTab('keys')}
-                >
-                  <Key size={20} />
-                  <span>API Keys</span>
-                </button>
-                <button
-                  className={`settings-nav-item ${activeSettingsTab === 'billing' ? 'active' : ''}`}
-                  onClick={() => setActiveSettingsTab('billing')}
-                >
-                  <CreditCard size={20} />
-                  <span>Billing & Plan</span>
-                </button>
+                {['account', 'preferences', 'keys', 'billing'].map(tab => (
+                  <button 
+                    key={tab} 
+                    className={`settings-nav-item ${activeSettingsTab === tab ? 'active' : ''}`}
+                    onClick={() => setActiveSettingsTab(tab)}
+                  >
+                    {tab === 'account' && <UserCircle size={20} />}
+                    {tab === 'preferences' && <SlidersHorizontal size={20} />}
+                    {tab === 'keys' && <Key size={20} />}
+                    {tab === 'billing' && <CreditCard size={20} />}
+                    <span style={{ textTransform: 'capitalize' }}>{tab}</span>
+                  </button>
+                ))}
               </div>
-
               <div className="settings-sidebar-bottom">
-                <button className="settings-nav-item text-danger" onClick={() => setActiveView('chat')}>
+                <button className="settings-nav-item text-danger" onClick={() => switchView('chat')}>
                   <SignOut size={20} />
                   <span>Sign Out</span>
                 </button>
@@ -390,33 +583,15 @@ function App() {
                     <h3>Account Profile</h3>
                     <p>Manage your public profile and personal details.</p>
                   </div>
-
                   <div className="settings-card">
                     <div className="profile-edit-section">
                       <div className="profile-avatar-large">
-                        <img src="https://i.pravatar.cc/150?img=33" alt="Admin" />
-                        <button className="btn-secondary btn-sm">Change Avatar</button>
+                        <img src="https://tse2.mm.bing.net/th/id/OIP.0w-434RsnyuFSVDME6vx1gHaHa?w=512&h=512&rs=1&pid=ImgDetMain&o=7&rm=3" alt="Admin" />
+                        <button className="btn-secondary-outline btn-sm" style={{ marginTop: '0.5rem' }}>Change Avatar</button>
                       </div>
-
                       <div className="settings-form">
-                        <div className="form-row">
-                          <div className="form-group">
-                            <label>First Name</label>
-                            <input type="text" className="settings-input" defaultValue="Admin" />
-                          </div>
-                          <div className="form-group">
-                            <label>Last Name</label>
-                            <input type="text" className="settings-input" defaultValue="User" />
-                          </div>
-                        </div>
-                        <div className="form-group">
-                          <label>Email Address</label>
-                          <input type="email" className="settings-input" defaultValue="admin@beta-ai.com" />
-                        </div>
-                        <div className="form-group">
-                          <label>Role</label>
-                          <input type="text" className="settings-input" defaultValue="Super Administrator" disabled />
-                        </div>
+                        <div className="form-group"><label>Name</label><input type="text" className="settings-input" defaultValue="Admin User" /></div>
+                        <div className="form-group"><label>Email</label><input type="email" className="settings-input" defaultValue="admin@kinsword.ai" /></div>
                         <div className="form-actions">
                           <button className="btn-primary">Save Changes</button>
                         </div>
@@ -430,23 +605,20 @@ function App() {
                 <div className="settings-panel">
                   <div className="settings-header">
                     <h3>App Preferences</h3>
-                    <p>Customize your experience on the Beta AI platform.</p>
+                    <p>Customize your experience.</p>
                   </div>
-
                   <div className="settings-card">
                     <div className="preference-item">
                       <div className="toggle-info">
                         <h4>Dark Mode</h4>
-                        <p>Toggle between light and dark themes.</p>
+                        <p>Switch between light and dark themes.</p>
                       </div>
                       <label className="switch">
-                        <input type="checkbox" defaultChecked />
+                        <input type="checkbox" checked={theme === 'dark'} onChange={() => setTheme(theme === 'light' ? 'dark' : 'light')} />
                         <span className="slider round"></span>
                       </label>
                     </div>
-
                     <div className="preference-divider"></div>
-
                     <div className="preference-item">
                       <div className="toggle-info">
                         <h4>Desktop Notifications</h4>
@@ -454,19 +626,6 @@ function App() {
                       </div>
                       <label className="switch">
                         <input type="checkbox" defaultChecked />
-                        <span className="slider round"></span>
-                      </label>
-                    </div>
-
-                    <div className="preference-divider"></div>
-
-                    <div className="preference-item">
-                      <div className="toggle-info">
-                        <h4>Compact Mode</h4>
-                        <p>Reduce padding and margins across the UI.</p>
-                      </div>
-                      <label className="switch">
-                        <input type="checkbox" />
                         <span className="slider round"></span>
                       </label>
                     </div>
@@ -480,33 +639,26 @@ function App() {
                     <h3>API Integrations</h3>
                     <p>Manage your external API keys.</p>
                   </div>
-
-                  <div className="settings-card">
+                   <div className="settings-card">
                     <div className="settings-form">
                       <div className="form-group">
-                        <label>OpenAI API Key</label>
+                        <label>Google Gemini API Key</label>
                         <div className="input-with-action">
-                          <input type="password" className="settings-input" defaultValue="sk-proj-xxxxxxxxxxxxxxxxxxxx" />
-                          <button className="btn-secondary btn-sm">Reveal</button>
+                          <input 
+                            type="password" 
+                            className="settings-input" 
+                            value={geminiApiKey} 
+                            onChange={(e) => setGeminiApiKey(e.target.value)}
+                            placeholder="AIza..."
+                          />
                         </div>
                       </div>
                       <div className="form-group">
-                        <label>Anthropic API Key</label>
-                        <div className="input-with-action">
-                          <input type="password" className="settings-input" defaultValue="sk-ant-xxxxxxxxxxxxxxxxxxxx" />
-                          <button className="btn-secondary btn-sm">Reveal</button>
-                        </div>
-                      </div>
-                      <div className="form-group" style={{ marginTop: '2rem' }}>
                         <label>Supabase URL</label>
                         <input type="text" className="settings-input" defaultValue="https://xyz.supabase.co" />
                       </div>
-                      <div className="form-group">
-                        <label>Supabase Anon Key</label>
-                        <input type="password" className="settings-input" defaultValue="eyJhbGciOiJIUzI1NiIsInR..." />
-                      </div>
                       <div className="form-actions">
-                        <button className="btn-primary">Update Keys</button>
+                        <button className="btn-primary" onClick={() => switchView('chat')}>Update & Save</button>
                       </div>
                     </div>
                   </div>
@@ -517,39 +669,28 @@ function App() {
                 <div className="settings-panel">
                   <div className="settings-header">
                     <h3>Billing & Plan</h3>
-                    <p>Manage your subscription and payment methods.</p>
+                    <p>Manage your subscription.</p>
                   </div>
-
-                  <div className="settings-card plan-card">
-                    <div className="plan-header">
-                      <div className="plan-title">
-                        <h4>Pro Plan</h4>
-                        <span className="badge badge-active">Active</span>
-                      </div>
-                      <div className="plan-price">
-                        <span className="currency">$</span><span className="amount">49</span><span className="period">/mo</span>
-                      </div>
+                  <div className="settings-card plan-card" style={{ padding: '2rem', background: 'linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-primary) 100%)', border: '1px solid var(--accent-light)', borderRadius: '16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                      <h4 style={{ fontSize: '1.25rem', fontWeight: '600' }}>Pro Plan</h4>
+                      <span className="badge-active">Active</span>
                     </div>
-                    <div className="plan-details">
-                      <ul>
-                        <li><img src={logo} alt="feature" width={16} height={16} /> Unlimited Standard Chats</li>
-
-                        <li><Database size={16} color="var(--accent)" /> Custom Supabase Integration</li>
-                        <li><ChatCircleDots size={16} color="var(--accent)" /> Priority Support</li>
-                      </ul>
-                    </div>
-                    <div className="plan-actions">
-                      <button className="btn-secondary">Cancel Plan</button>
-                      <button className="btn-primary">Upgrade to Enterprise</button>
+                    <div style={{ fontSize: '2rem', fontWeight: '700', marginBottom: '1rem' }}>$49<span style={{ fontSize: '1rem', fontWeight: 'normal', color: 'var(--text-muted)' }}>/mo</span></div>
+                    <ul style={{ listStyle: 'none', padding: 0, marginBottom: '2rem' }}>
+                      <li style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}><img src={logo} width={16} height={16} alt="icon" /> Unlimited Standard Chats</li>
+                      <li style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}><Database size={16} /> Custom Integrations</li>
+                    </ul>
+                    <div style={{ display: 'flex', gap: '1rem' }}>
+                      <button className="btn-primary" style={{ flex: 1 }}>Upgrade</button>
+                      <button className="btn-secondary-outline" style={{ flex: 1 }}>Manage</button>
                     </div>
                   </div>
                 </div>
               )}
-
             </div>
           </div>
         </div>
-
       </main>
     </div>
   );
