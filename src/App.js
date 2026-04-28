@@ -13,6 +13,11 @@ import {
 import logo from './assests/kins-bgr.png'
 
 function App() {
+  // BNX Auth State
+  const [user, setUser] = useState(null);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const GUEST_LIMIT = 2;
+
   // Theme State
   const [theme, setTheme] = useState(() => localStorage.getItem('kinsword-theme') || 'light');
   
@@ -23,18 +28,82 @@ function App() {
   // const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 768);
 
-useEffect(() => {
-  const handleResize = () => {
-    if (window.innerWidth < 768) {
-      setSidebarOpen(false);
-    } else {
-      setSidebarOpen(true);
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth < 768) {
+        setSidebarOpen(false);
+      } else {
+        setSidebarOpen(true);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // --- BNX AUTH LOGIC ---
+  const fetchUserProfile = async (token) => {
+    try {
+      const res = await fetch('https://api.bnxmail.com/api/users/me', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        setUser(data.data);
+      } else {
+        handleLogout();
+      }
+    } catch (err) {
+      console.error('Failed to fetch user profile:', err);
     }
   };
 
-  window.addEventListener('resize', handleResize);
-  return () => window.removeEventListener('resize', handleResize);
-}, []);
+  const handleLogout = () => {
+    localStorage.removeItem('bnx-token');
+    setUser(null);
+  };
+
+  const loginWithBNX = () => {
+    const clientId = 'bnx-test-app';
+    const redirectUri = 'https://www.kinsword.com';
+    const state = 'beta-ai-auth';
+    window.location.href = `https://www.b2auth.com/?client_id=${clientId}&redirect_uri=${redirectUri}&state=${state}`;
+  };
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+
+    if (code) {
+      console.log('OAuth code detected, exchanging for token...');
+      fetch('https://api.bnxmail.com/api/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grantType: 'authorization_code',
+          code,
+          clientId: 'bnx-test-app',
+          clientSecret: 'secure-test-secret-2026'
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          const token = data.data.access_token;
+          localStorage.setItem('bnx-token', token);
+          window.history.replaceState({}, document.title, "/");
+          fetchUserProfile(token);
+        }
+      })
+      .catch(err => console.error('Token exchange failed:', err));
+    } else {
+      const savedToken = localStorage.getItem('bnx-token');
+      if (savedToken) {
+        fetchUserProfile(savedToken);
+      }
+    }
+  }, []);
+  // --- END BNX AUTH LOGIC ---
   
   // Chat History Management
   const [conversations, setConversations] = useState(() => {
@@ -184,12 +253,27 @@ useEffect(() => {
     }
   };
 
+  const getGuestUserMessageCount = () => {
+    return conversations.reduce((acc, chat) => 
+      acc + chat.messages.filter(m => m.role === 'user').length, 0
+    );
+  };
+
   const handleSend = async () => {
     if (!inputVal.trim()) return;
 
     if (inputMode === 'search') {
       handleSearch(inputVal.trim());
       return;
+    }
+
+    // Guest Limit Check
+    if (!user) {
+      const messageCount = getGuestUserMessageCount();
+      if (messageCount >= GUEST_LIMIT) {
+        setShowLoginModal(true);
+        return;
+      }
     }
 
     const userMsg = inputVal.trim();
@@ -313,14 +397,22 @@ useEffect(() => {
         </div>
 
         <div className="sidebar-footer">
-          <button className="user-profile" onClick={() => switchView('settings')}>
-            <img src="https://tse2.mm.bing.net/th/id/OIP.0w-434RsnyuFSVDME6vx1gHaHa?w=512&h=512&rs=1&pid=ImgDetMain&o=7&rm=3" alt="Admin" />
-            <div className="user-info">
-              <span className="user-name">Admin User</span>
-              <span className="user-role">Pro Plan</span>
-            </div>
-            <Gear size={20} />
-          </button>
+          {user ? (
+            <button className="user-profile" onClick={() => switchView('settings')}>
+              <div className="user-avatar-placeholder" style={{ background: 'var(--primary)', width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 'bold', color: 'white' }}>
+                {(user.name || user.username || 'G').substring(0, 1).toUpperCase()}
+              </div>
+              <div className="user-info">
+                <span className="user-name">{user.name}</span>
+                <span className="user-role">{user.email}</span>
+              </div>
+              <Gear size={20} />
+            </button>
+          ) : (
+            <button className="btn-primary" style={{ margin: '1rem', width: 'calc(100% - 2rem)' }} onClick={loginWithBNX}>
+              Login with BNX
+            </button>
+          )}
         </div>
       </aside>
 
@@ -469,8 +561,12 @@ useEffect(() => {
 
                 {activeChat.messages.map((msg, i) => (
                   <div key={i} className={`message ${msg.role === 'user' ? 'user-message' : 'ai-message'}`}>
-                    <div className="message-avatar" style={msg.role === 'user' ? { backgroundImage: 'url("https://tse2.mm.bing.net/th/id/OIP.0w-434RsnyuFSVDME6vx1gHaHa?w=512&h=512&rs=1&pid=ImgDetMain&o=7&rm=3")' } : {}}>
-                      {msg.role === 'ai' && <img src={logo} alt="AI" width={20} height={20} style={{ objectFit: 'contain' }} />}
+                    <div className="message-avatar" style={msg.role === 'user' ? { background: 'var(--primary)', color: 'white', fontWeight: 'bold', fontSize: '0.8rem' } : {}}>
+                      {msg.role === 'user' ? (
+                        (user?.name || user?.username || 'G').substring(0, 1).toUpperCase()
+                      ) : (
+                        <img src={logo} alt="AI" width={20} height={20} style={{ objectFit: 'contain' }} />
+                      )}
                     </div>
                     <div className="message-content">
                       <p>{msg.content}</p>
@@ -569,9 +665,9 @@ useEffect(() => {
                 ))}
               </div>
               <div className="settings-sidebar-bottom">
-                <button className="settings-nav-item text-danger" onClick={() => switchView('chat')}>
+                <button className="settings-nav-item text-danger" onClick={handleLogout}>
                   <SignOut size={20} />
-                  <span>Sign Out</span>
+                  <span>Logout</span>
                 </button>
               </div>
             </div>
@@ -584,19 +680,24 @@ useEffect(() => {
                     <p>Manage your public profile and personal details.</p>
                   </div>
                   <div className="settings-card">
-                    <div className="profile-edit-section">
-                      <div className="profile-avatar-large">
-                        <img src="https://tse2.mm.bing.net/th/id/OIP.0w-434RsnyuFSVDME6vx1gHaHa?w=512&h=512&rs=1&pid=ImgDetMain&o=7&rm=3" alt="Admin" />
-                        <button className="btn-secondary-outline btn-sm" style={{ marginTop: '0.5rem' }}>Change Avatar</button>
-                      </div>
-                      <div className="settings-form">
-                        <div className="form-group"><label>Name</label><input type="text" className="settings-input" defaultValue="Admin User" /></div>
-                        <div className="form-group"><label>Email</label><input type="email" className="settings-input" defaultValue="admin@kinsword.ai" /></div>
-                        <div className="form-actions">
-                          <button className="btn-primary">Save Changes</button>
+                      <div className="profile-edit-section">
+                        <div className="profile-avatar-large">
+                          <div className="user-avatar-placeholder" style={{ background: 'var(--primary)', width: 80, height: 80, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem', fontWeight: 'bold', color: 'white', marginBottom: '1rem' }}>
+                            {(user?.name || 'G').substring(0, 1).toUpperCase()}
+                          </div>
+                          <button className="btn-secondary-outline btn-sm">Change Avatar</button>
+                        </div>
+                        <div className="settings-form" key={user?.id}>
+                          <div className="form-group"><label>Name</label><input type="text" className="settings-input" value={user?.name || ''} placeholder="Guest" readOnly /></div>
+                          <div className="form-group"><label>BNX Mail Address</label><input type="email" className="settings-input" value={user?.email || ''} placeholder="N/A" readOnly /></div>
+                          <div className="form-group"><label>Account Type</label><input type="text" className="settings-input" value={user?.accountType || 'PERSONAL'} readOnly /></div>
+                          
+                          <div className="form-actions" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>This account is managed via BNX Identity.</p>
+                            <button className="btn-secondary-outline" onClick={() => window.open('https://www.b2auth.com', '_blank')}>Manage on BNX Dashboard</button>
+                          </div>
                         </div>
                       </div>
-                    </div>
                   </div>
                 </div>
               )}
@@ -692,6 +793,31 @@ useEffect(() => {
           </div>
         </div>
       </main>
+
+      {/* Login Required Modal */}
+      {showLoginModal && (
+        <div className="login-modal-overlay">
+          <div className="login-modal">
+            <button className="close-modal-btn" onClick={() => setShowLoginModal(false)}>
+              <X size={20} />
+            </button>
+            <div className="login-modal-icon">
+              <Warning size={32} weight="bold" />
+            </div>
+            <h2>Login Required</h2>
+            <p>You've reached the free message limit. Please log in with your BNX account to continue chatting with KINSWORD AI.</p>
+            <div className="login-modal-actions">
+              <button className="login-modal-btn primary" onClick={() => { setShowLoginModal(false); loginWithBNX(); }}>
+                <Key size={20} weight="fill" />
+                Login with BNX
+              </button>
+              <button className="login-modal-btn secondary" onClick={() => setShowLoginModal(false)}>
+                Maybe Later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
