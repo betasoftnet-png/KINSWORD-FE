@@ -17,13 +17,6 @@ function App() {
   const [user, setUser] = useState(null);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const GUEST_LIMIT = 2;
-  console.log(process.env.REACT_APP_GEMINI_API_KEY)
-  console.log(process.env.REACT_APP_BNX_API_URL)
-  console.log(process.env.REACT_APP_BNX_AUTH_URL)
-  console.log(process.env.REACT_APP_CLIENT_ID)
-  console.log(process.env.REACT_APP_CLIENT_SECRET)
-  console.log(process.env.REACT_APP_REDIRECT_URI)
-  console.log(process.env.REACT_APP_SEARCH_API_URL)
 
   // Theme State
   const [theme, setTheme] = useState(() => localStorage.getItem('kinsword-theme') || 'light');
